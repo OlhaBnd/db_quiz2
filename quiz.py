@@ -1,145 +1,137 @@
-import sqlite3
-db_name = 'quiz.sqlite'
-conn = None
-cursor = None
+from random import shuffle
+from flask import Flask, session, redirect, url_for, render_template_string, request
+from db_scripts import get_question_after, init_db
 
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'ThisIsSecretSecretSecretLife'
 
-def open():
-    global conn, cursor
-    conn = sqlite3.connect(db_name)
-    cursor = conn.cursor()
+# Ініціалізуємо базу
+init_db()
 
+# --------------------------
+# CSS-шаблон для кнопок і сторінки
+# --------------------------
+STYLE = """
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f4f8;
+    text-align: center;
+    padding: 50px;
+}
+h2 {
+    color: #333;
+}
+button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 15px 30px;
+    margin: 10px;
+    font-size: 16px;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: 0.3s;
+}
+button:hover {
+    background-color: #45a049;
+}
+a.finish {
+    display: inline-block;
+    margin-top: 20px;
+    padding: 10px 25px;
+    background-color: #f44336;
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    transition: 0.3s;
+}
+a.finish:hover {
+    background-color: #d32f2f;
+}
+.feedback {
+    font-size: 20px;
+    margin: 20px 0;
+}
+</style>
+"""
 
-def close():
-    cursor.close()
-    conn.close()
+# --------------------------
+# Головна сторінка
+# --------------------------
+@app.route('/')
+def index():
+    session['quiz'] = 1  # або randint(1,3) для випадкової вікторини
+    session['last_question'] = 0
+    session['score'] = 0
+    return f'{STYLE}<a href="/test"><button>Почати тест</button></a>'
 
+# --------------------------
+# Сторінка тесту
+# --------------------------
+@app.route('/test')
+def test():
+    result = get_question_after(session['last_question'], session['quiz'])
 
-def do(query):
-    cursor.execute(query)
-    conn.commit()
+    if result is None:
+        return redirect(url_for('result'))
 
+    session['last_question'] = result[0]
 
-def clear_db():
-    ''' видаляє всі таблиці '''
-    open()
-    query = '''DROP TABLE IF EXISTS quiz_content'''
-    do(query)
-    query = '''DROP TABLE IF EXISTS question'''
-    do(query)
-    query = '''DROP TABLE IF EXISTS quiz'''
-    do(query)
-    close()
-    
-def create():
-    open()
-    cursor.execute('''PRAGMA foreign_keys=on''')
+    question_text = result[1]
+    correct = result[2]
+    wrongs = [result[3], result[4], result[5]]
 
+    answers = wrongs + [correct]
+    shuffle(answers)
 
-    do('''CREATE TABLE IF NOT EXISTS quiz (
-           id INTEGER PRIMARY KEY,
-           name VARCHAR)''')
+    session['correct_answer'] = correct
 
+    # HTML із стилізацією та кнопкою "Завершити тест"
+    html = f'''
+    {STYLE}
+    <h2>{question_text}</h2>
+    <form method="get" action="/answer">
+        {"".join(f'<button type="submit" name="answer" value="{a}">{a}</button><br><br>' for a in answers)}
+    </form>
+    <a href="/result" class="finish">Завершити тест</a>
+    '''
+    return render_template_string(html)
 
-    do('''CREATE TABLE IF NOT EXISTS question (
-               id INTEGER PRIMARY KEY,
-               question VARCHAR,
-               answer VARCHAR,
-               wrong1 VARCHAR,
-               wrong2 VARCHAR,
-               wrong3 VARCHAR)''')
+# --------------------------
+# Обробка відповіді
+# --------------------------
+@app.route('/answer')
+def answer():
+    user_ans = request.args.get('answer')
+    correct = session.get('correct_answer')
 
+    if user_ans == correct:
+        session['score'] += 1
+        feedback = f'<div class="feedback" style="color:green;">Правильно! ✅</div>'
+    else:
+        feedback = f'<div class="feedback" style="color:red;">Неправильно! ❌ Правильна: {correct}</div>'
 
-    do('''CREATE TABLE IF NOT EXISTS quiz_content (
-               id INTEGER PRIMARY KEY,
-               quiz_id INTEGER,
-               question_id INTEGER,
-               FOREIGN KEY (quiz_id) REFERENCES quiz (id),
-               FOREIGN KEY (question_id) REFERENCES question (id) )''')
-    close()
+    feedback += '<a href="/test"><button>Наступне питання</button></a>'
+    feedback += '<br><a href="/result" class="finish">Завершити тест</a>'
+    return render_template_string(STYLE + feedback)
 
+# --------------------------
+# Кінець тесту
+# --------------------------
+@app.route('/result')
+def result():
+    score = session.get('score', 0)
+    html = f'''
+    {STYLE}
+    <h2>Тест завершено!</h2>
+    <p>Ваш результат: {score} балів</p>
+    <a href="/"><button>Повернутися на головну</button></a>
+    '''
+    return render_template_string(html)
 
-def add_questions():
-    questions = [
-        ('Скільки місяців на рік мають 28 днів?', 'Всі', 'Один', 'Жодного', 'Два'),
-        ('Яким стане зелена скеля, якщо впаде в Червоне море?', 'Мокрим', 'Червоним', 'Не зміниться', 'Фіолетовим'),
-        ('Якою рукою краще розмішувати чай?', 'Ложкою', 'Правою', 'Лівою', 'Любою'),
-        ('Що не має довжини, глибини, ширини, висоти, а можна виміряти?', 'Час', 'Дурність', 'Море', 'Повітря'),
-        ('Коли сіткою можна витягнути воду?', 'Коли вода замерзла', 'Коли немає риби', 'Коли спливла золота рибка', 'Коли сітка порвалася'),
-        ('Що більше слона і нічого не важить?', 'Тінь слона', 'Повітряна куля', 'Парашут', 'Хмара')
-    ]
-    open()
-    cursor.executemany('''INSERT INTO question (question, answer, wrong1, wrong2, wrong3) VALUES (?,?,?,?,?)''', questions)
-    conn.commit()
-    close()
-
-
-def add_quiz():
-    quizes = [
-        ('Своя гра', ),
-        ('Хто хоче стати мільйонером?', ),
-        ('Найрозумніший', )
-    ]
-    open()
-    cursor.executemany('''INSERT INTO quiz (name) VALUES (?)''', quizes)
-    conn.commit()
-    close()
-
-
-def add_links():
-    open()
-    cursor.execute('''PRAGMA foreign_keys=on''')
-    query = "INSERT INTO quiz_content (quiz_id, question_id) VALUES (?,?)"
-    answer = input("Додати зв'язок (y / n)?")
-    while answer != 'n':
-        quiz_id = int(input("id вікторини: "))
-        question_id = int(input("id питання: "))
-        cursor.execute(query, [quiz_id, question_id])
-        conn.commit()
-        answer = input("Додати зв'язок (y / n)?")
-    close()
-
-
-def show(table):
-    query = 'SELECT * FROM ' + table
-    open()
-    cursor.execute(query)
-    print(cursor.fetchall())
-    close()
-
-
-def show_tables():
-    show('question')
-    show('quiz')
-    show('quiz_content')
-
-
-def get_question_after(question_id = 0, quiz_id=1):
-    ''' повертає наступне питання після запитання з переданим id
-     для першого запитання передається значення за замовчуванням '''
-    open()
-    query = '''
-    SELECT quiz_content.id, question.question, question.answer, question.wrong1, question.wrong2, question.wrong3
-    FROM question, quiz_content
-    WHERE quiz_content.question_id == question.id
-    AND quiz_content.id > ? AND quiz_content.quiz_id == ?
-    ORDER BY quiz_content.id '''
-    cursor.execute(query, [question_id, quiz_id] )
-    result = cursor.fetchone()
-    close()
-    return result
-
-
-def main():
-    clear_db()
-    create()
-    add_questions()
-    add_quiz()
-    add_links()
-    show_tables()
-    # Виведення в консоль питання з id=3, id вікторини = 1
-    print(get_question_after(3, 1))
-
-
-if __name__ == "__main__":
-    main()
+# --------------------------
+# Запуск сервера
+# --------------------------
+if __name__ == '__main__':
+    app.run(debug=True)
