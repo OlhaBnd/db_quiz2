@@ -1,137 +1,73 @@
-from random import shuffle
-from flask import Flask, session, redirect, url_for, render_template_string, request
-from db_scripts import get_question_after, init_db
-
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'ThisIsSecretSecretSecretLife'
-
-# Ініціалізуємо базу
-init_db()
-
-# --------------------------
-# CSS-шаблон для кнопок і сторінки
-# --------------------------
-STYLE = """
-<style>
-body {
-    font-family: Arial, sans-serif;
-    background-color: #f0f4f8;
-    text-align: center;
-    padding: 50px;
-}
-h2 {
-    color: #333;
-}
-button {
-    background-color: #4CAF50;
-    color: white;
-    border: none;
-    padding: 15px 30px;
-    margin: 10px;
-    font-size: 16px;
-    cursor: pointer;
-    border-radius: 8px;
-    transition: 0.3s;
-}
-button:hover {
-    background-color: #45a049;
-}
-a.finish {
-    display: inline-block;
-    margin-top: 20px;
-    padding: 10px 25px;
-    background-color: #f44336;
-    color: white;
-    text-decoration: none;
-    border-radius: 8px;
-    transition: 0.3s;
-}
-a.finish:hover {
-    background-color: #d32f2f;
-}
-.feedback {
-    font-size: 20px;
-    margin: 20px 0;
-}
-</style>
-"""
-
-# --------------------------
-# Головна сторінка
-# --------------------------
-@app.route('/')
-def index():
-    session['quiz'] = 1  # або randint(1,3) для випадкової вікторини
+from flask import Flask, session, request, redirect, url_for
+from db_scripts import get_question_after, get_quises
+ 
+def start_quis(quiz_id):
+    '''створює потрібні значення у словнику session'''
+    session['quiz'] = quiz_id
     session['last_question'] = 0
-    session['score'] = 0
-    return f'{STYLE}<a href="/test"><button>Почати тест</button></a>'
+ 
+def end_quiz():
+    session.clear()
+ 
+def quiz_form():
+    ''' функція отримує список вікторин з бази і формує форму з списком, що випадає'''
+    html_beg = '''<html><body><h2>Виберіть вікторину:</h2><form method="post" action="index"><select name="quiz">'''
+    frm_submit = '''<p><input type="submit" value="Вибрати"> </p>'''
 
-# --------------------------
-# Сторінка тесту
-# --------------------------
-@app.route('/test')
-def test():
-    result = get_question_after(session['last_question'], session['quiz'])
 
-    if result is None:
-        return redirect(url_for('result'))
-
-    session['last_question'] = result[0]
-
-    question_text = result[1]
-    correct = result[2]
-    wrongs = [result[3], result[4], result[5]]
-
-    answers = wrongs + [correct]
-    shuffle(answers)
-
-    session['correct_answer'] = correct
-
-    # HTML із стилізацією та кнопкою "Завершити тест"
-    html = f'''
-    {STYLE}
-    <h2>{question_text}</h2>
-    <form method="get" action="/answer">
-        {"".join(f'<button type="submit" name="answer" value="{a}">{a}</button><br><br>' for a in answers)}
-    </form>
-    <a href="/result" class="finish">Завершити тест</a>
-    '''
-    return render_template_string(html)
-
-# --------------------------
-# Обробка відповіді
-# --------------------------
-@app.route('/answer')
-def answer():
-    user_ans = request.args.get('answer')
-    correct = session.get('correct_answer')
-
-    if user_ans == correct:
-        session['score'] += 1
-        feedback = f'<div class="feedback" style="color:green;">Правильно! ✅</div>'
+    html_end = '''</select>''' + frm_submit + '''</form></body></html>'''
+    options = ''' '''
+    q_list = get_quises()
+    for id, name in q_list:
+        option_line = ('''<option value="''' +
+                        str(id) + '''">''' +
+                        str(name) + '''</option>
+                      ''')
+        options = options + option_line
+    return html_beg + options + html_end
+       
+def index():
+    ''' Перша сторінка: якщо прийшли запитом GET, то вибрати вікторину,
+     якщо POST - то запам'ятати id вікторини та відправляти на запитання
+'''
+    if request.method == 'GET':
+        # вікторина не обрана, скидаємо id вікторини та показуємо форму вибору
+        start_quis(-1)
+        return quiz_form()
     else:
-        feedback = f'<div class="feedback" style="color:red;">Неправильно! ❌ Правильна: {correct}</div>'
-
-    feedback += '<a href="/test"><button>Наступне питання</button></a>'
-    feedback += '<br><a href="/result" class="finish">Завершити тест</a>'
-    return render_template_string(STYLE + feedback)
-
-# --------------------------
-# Кінець тесту
-# --------------------------
-@app.route('/result')
+        # отримали додаткові дані у запиті! Використовуємо їх:
+        quest_id = request.form.get('quiz') # вибраний номер вікторини 
+        start_quis(quest_id)
+        return redirect(url_for('test'))
+ 
+def test():
+    '''повертає сторінку питання'''
+    # якщо користувач без вибору вікторини пішов відразу на адресу '/test'? 
+    if not ('quiz' in session) or int(session['quiz']) < 0:
+        return redirect(url_for('index'))
+    else:
+        # тут поки що стара версія функції:
+        result = get_question_after(session['last_question'], session['quiz'])
+        if result is None or len(result) == 0:
+            return redirect(url_for('result'))
+        else:
+            session['last_question'] = result[0]
+            # якщо ми навчили базу повертати Row чи dict, то треба писати не result[0], а result['id']
+            return '<h1>' + str(session['quiz']) + '<br>' + str(result) + '</h1>'
+ 
 def result():
-    score = session.get('score', 0)
-    html = f'''
-    {STYLE}
-    <h2>Тест завершено!</h2>
-    <p>Ваш результат: {score} балів</p>
-    <a href="/"><button>Повернутися на головну</button></a>
-    '''
-    return render_template_string(html)
-
-# --------------------------
-# Запуск сервера
-# --------------------------
-if __name__ == '__main__':
-    app.run(debug=True)
+    end_quiz()
+    return "that's all folks!"
+ 
+# Створюємо об'єкт веб-програми:
+app = Flask(__name__)  
+app.add_url_rule('/', 'index', index)   # створює правило для URL '/'
+app.add_url_rule('/index', 'index', index, methods=['post', 'get']) # правило для '/index' 
+app.add_url_rule('/test', 'test', test) # створює правило для URL '/test'
+app.add_url_rule('/result', 'result', result) # створює правило для URL'/test'
+# Встановлюємо ключ шифрування:
+app.config['SECRET_KEY'] = 'ThisIsSecretSecretSecretLife'
+ 
+if __name__ == "__main__":
+    # Запускаємо веб-сервер:
+    app.run()
